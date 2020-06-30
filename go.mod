@@ -1,4 +1,4 @@
-module github.com/lu4p/binclude
+module github.com/audiolion/binclude
 
 go 1.14
 
