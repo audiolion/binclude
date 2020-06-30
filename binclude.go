@@ -3,6 +3,7 @@ package binclude
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -130,6 +131,34 @@ func (fs *FileSystem) CopyFile(bincludePath, hostPath string) error {
 	return nil
 }
 
+func (fs *FileSystem) Encode(algo Compression) error {
+	for _, file := range fs.Files {
+		if file.Mode.IsDir() || !shouldCompress(file.Content) {
+			continue
+		}
+
+		var b = &bytes.Buffer{}
+
+		var writer io.WriteCloser
+		if algo == Gzip {
+			writer = gzip.NewWriter(b)
+		} else {
+			writer = NopCloser(b)
+		}
+
+		_, err := writer.Write(file.Content)
+		writer.Close()
+		if err != nil {
+			return err
+		}
+
+		file.Compression = algo
+		file.Content = []byte(hex.EncodeToString(b.Bytes()))
+	}
+
+	return nil
+}
+
 // Compression the compression algorithm to use
 type Compression int
 
@@ -143,28 +172,25 @@ const (
 // Decompress turns a FileSystem with compressed files into a filesystem without compressed files
 func (fs *FileSystem) Decompress() (err error) {
 	for path, file := range fs.Files {
-		if file.Compression == None {
-			continue
+		dst := make([]byte, hex.DecodedLen(len(file.Content)))
+		_, err = hex.Decode(dst, file.Content)
+		if err != nil {
+			return err
 		}
 
-		f, _ := fs.Open(path) // open cannot error when using a path we got from the fs
-		defer f.Close()
-
-		var compReader io.Reader
 		if file.Compression == Gzip {
-			compReader, err = gzip.NewReader(f)
+			compReader, err := gzip.NewReader(bytes.NewReader(dst))
 			if err != nil {
 				return fmt.Errorf("Gzip err: %v", err)
 			}
+
+			dst, err = ioutil.ReadAll(compReader)
+			if err != nil {
+				return fmt.Errorf("Reader err: %v", err)
+			}
 		}
 
-		content, err := ioutil.ReadAll(compReader)
-		if err != nil {
-			return fmt.Errorf("Reader err: %v", err)
-		}
-		f.Close()
-
-		fs.Files[path].Content = content
+		fs.Files[path].Content = dst
 	}
 
 	return nil
@@ -173,31 +199,7 @@ func (fs *FileSystem) Decompress() (err error) {
 
 // Compress turns a FileSystem without compressed files into a filesystem with compressed files
 func (fs *FileSystem) Compress(algo Compression) error {
-	if algo == None {
-		return nil
-	}
-	for _, file := range fs.Files {
-		if file.Mode.IsDir() || !shouldCompress(file.Content) {
-			continue
-		}
-		var b bytes.Buffer
-
-		var writer io.WriteCloser
-		if algo == Gzip {
-			writer = gzip.NewWriter(&b)
-		}
-
-		_, err := writer.Write(file.Content)
-		writer.Close()
-		if err != nil {
-			return err
-		}
-
-		file.Compression = algo
-		file.Content = b.Bytes()
-	}
-
-	return nil
+	return fs.Encode(algo)
 }
 
 // compressExcl exclude certain files from compression which don't compress well
@@ -333,5 +335,17 @@ func (info *FileInfo) IsDir() bool {
 
 // Sys underlying data source (returns nil)
 func (info *FileInfo) Sys() interface{} {
+	return nil
+}
+
+func NopCloser(w io.Writer) io.WriteCloser {
+	return &NoopCloser{Writer: w}
+}
+
+type NoopCloser struct {
+	io.Writer
+}
+
+func (nc NoopCloser) Close() error {
 	return nil
 }

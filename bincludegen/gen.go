@@ -93,7 +93,7 @@ func Generate(compress binclude.Compression) error {
 	}
 
 	for _, fs := range fileSystems {
-		if err := fs.Compress(compress); err != nil {
+		if err := fs.Encode(compress); err != nil {
 			return err
 		}
 	}
